@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D&D NFC GM Dashboard</title>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #f5f5f5; margin: 0; padding: 20px; }
+    h1 { text-align: center; color: #ff5555; }
+    .container { max-width: 800px; margin: 0 auto; background: #2a2a2a; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .card { background: #333; padding: 15px; margin-bottom: 15px; border-radius: 6px; }
+    input[type="text"], input[type="number"] { width: calc(100% - 20px); padding: 10px; margin: 10px 0; border: 1px solid #444; border-radius: 4px; background: #222; color: #fff; }
+    button { background: #ff5555; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 4px; font-weight: bold; }
+    button:hover { background: #ff3333; }
+    .tag-alert { background: #ffaa00; color: #000; padding: 10px; border-radius: 4px; margin-bottom: 15px; display: none; }
+  </style>
+</head>
+<body>
+  <h1>GM Dashboard</h1>
+  <div class="container">
+    <div id="wsStatus" style="text-align: center; padding: 5px; background: #550000; margin-bottom: 15px; border-radius: 4px;">Connecting to Server...</div>
+
+    <div id="tagAlert" class="tag-alert">
+      <strong>New Tag Scanned!</strong> UID: <span id="newUid"></span>
+      <button onclick="fillFormFromAlert()">Add to Database</button>
+    </div>
+
+    <div class="card">
+      <h3>Scan History & Logs</h3>
+      <div id="logBox" style="height: 150px; overflow-y: auto; background: #222; padding: 10px; border: 1px solid #444; border-radius: 4px; font-family: monospace; font-size: 14px; margin-bottom: 10px;">
+        <div style="color: #888;">Waiting for scans...</div>
+      </div>
+      
+      <h4 onclick="document.getElementById('rawDebug').style.display = document.getElementById('rawDebug').style.display === 'none' ? 'block' : 'none'" style="cursor:pointer; color: #ffaa00; margin: 0;">▼ Raw Flipper Debug Output (Click to Toggle)</h4>
+      <div id="rawDebug" style="display:none; height: 150px; overflow-y: auto; background: #111; color: #0f0; padding: 10px; border: 1px solid #444; border-radius: 4px; font-family: monospace; font-size: 12px; margin-top: 5px;">
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Add / Edit Entity</h3>
+      <label>NFC UID</label>
+      <input type="text" id="uidInput" placeholder="e.g. 04:62:5C:82:1E:61:80">
+      <label>Name</label>
+      <input type="text" id="nameInput" placeholder="e.g. Goblin">
+      <label>Current HP</label>
+      <input type="number" id="hpInput" placeholder="10">
+      <label>Max HP</label>
+      <input type="number" id="maxHpInput" placeholder="15">
+      <label>Conditions (comma separated)</label>
+      <input type="text" id="conditionsInput" placeholder="poisoned, blinded">
+      <div style="margin-top: 15px;">
+        <button onclick="saveEntity()">Save Entity Data</button>
+        <button onclick="triggerScan()" style="background-color: #8800cc; margin-left: 10px;">Push to CYD Display</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Database</h3>
+      <div id="dbList">Loading...</div>
+    </div>
+  </div>
+
+  <script>
+    const wsUrl = `ws://${window.location.host}/ws`;
+    const socket = new WebSocket(wsUrl);
+    let currentScannedUid = null;
+
+    socket.onopen = () => {
+      document.getElementById('wsStatus').innerText = 'Connected to Server';
+      document.getElementById('wsStatus').style.background = '#005500';
+    };
+    socket.onclose = () => {
+      document.getElementById('wsStatus').innerText = 'Disconnected from Server';
+      document.getElementById('wsStatus').style.background = '#550000';
+    };
+
+    socket.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.event === 'unknown_tag_scanned') {
+        const data = msg.data;
+        currentScannedUid = data.uid;
+        document.getElementById('newUid').innerText = data.uid;
+        document.getElementById('tagAlert').style.display = 'block';
+        addLog(`Unknown Tag Scanned: ${data.uid}`, data.uid);
+      }
+      if (msg.event === 'server_log') {
+        addLog(msg.data.message, msg.data.uid);
+      }
+      if (msg.event === 'debug_log') {
+        const rawDebug = document.getElementById('rawDebug');
+        rawDebug.innerHTML = `<div style="border-bottom: 1px solid #222;">${msg.data.log}</div>` + rawDebug.innerHTML;
+      }
+    };
+
+    function addLog(text, uid) {
+      const logBox = document.getElementById('logBox');
+      if (logBox.innerText.includes('Waiting for scans')) logBox.innerHTML = '';
+      
+      const time = new Date().toLocaleTimeString();
+      let logHtml = `<div style="margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 5px;">
+        <span style="color: #ffaa00;">[${time}]</span> ${text} 
+      `;
+      if (uid) {
+        logHtml += `<button style="padding: 2px 8px; font-size: 11px; margin-left: 10px;" onclick="fillFormFromLog('${uid}')">Edit/Save Stats</button>`;
+      }
+      logHtml += `</div>`;
+      
+      logBox.innerHTML = logHtml + logBox.innerHTML; // Prepend
+    }
+
+    function fillFormFromLog(uid) {
+      document.getElementById('uidInput').value = uid;
+    }
+
+    function fillFormFromAlert() {
+      document.getElementById('uidInput').value = currentScannedUid;
+      document.getElementById('tagAlert').style.display = 'none';
+    }
+
+    async function loadDb() {
+      const res = await fetch('/api/entities');
+      const db = await res.json();
+      const dbList = document.getElementById('dbList');
+      dbList.innerHTML = '';
+      for (const [uid, data] of Object.entries(db)) {
+        dbList.innerHTML += `<div style="border-bottom: 1px solid #444; padding: 10px 0;">
+          <strong>UID:</strong> ${uid} <br>
+          <strong>Name:</strong> ${data.name} | <strong>HP:</strong> ${data.hp}/${data.maxHp} <br>
+          <strong>Conditions:</strong> ${data.conditions.join(', ') || 'None'}
+          <br><button style="margin-top:5px; padding: 5px 10px; font-size: 12px;" onclick="editEntity('${uid}')">Edit</button>
+        </div>`;
+      }
+    }
+
+    async function editEntity(uid) {
+      const res = await fetch('/api/entities');
+      const db = await res.json();
+      const data = db[uid];
+      if (data) {
+        document.getElementById('uidInput').value = uid;
+        document.getElementById('nameInput').value = data.name;
+        document.getElementById('hpInput').value = data.hp;
+        document.getElementById('maxHpInput').value = data.maxHp;
+        document.getElementById('conditionsInput').value = data.conditions.join(', ');
+      }
+    }
+
+    async function saveEntity() {
+      const uid = document.getElementById('uidInput').value.trim();
+      const data = {
+        name: document.getElementById('nameInput').value.trim(),
+        hp: parseInt(document.getElementById('hpInput').value) || 0,
+        maxHp: parseInt(document.getElementById('maxHpInput').value) || 0,
+        conditions: document.getElementById('conditionsInput').value.split(',').map(s => s.trim()).filter(s => s)
+      };
+
+      if (!uid || !data.name) return alert('UID and Name are required');
+
+      await fetch('/api/entities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, data })
+      });
+      if (res.ok) {
+        alert('Entity saved successfully!');
+      } else {
+        alert('Failed to save entity');
+      }
+    }
+
+    async function triggerScan() {
+      const uid = document.getElementById('uidInput').value;
+      if (!uid) {
+        alert('Please enter an NFC UID to display!');
+        return;
+      }
+
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid })
+      });
+
+      if (res.ok) {
+        addLog(`Manually Triggered CYD Display for UID: ${uid}`, uid);
+      } else {
+        alert('Failed to push to display!');
+      }
+    }
+  </script>
+</body>
+</html>

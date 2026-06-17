@@ -1,0 +1,15 @@
+[Unit]
+Description=D&D Statblock NFC Scanner Service
+After=multi-user.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{PROJECT_DIR}}
+ExecStart={{PROJECT_DIR}}/pi_brain/bootstrap.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
